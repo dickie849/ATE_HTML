@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Web 网页串口调试工具</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background-color: #f4f4f9; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .section { margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], textarea { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        .controls { display: flex; gap: 10px; align-items: flex-end; }
+        button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 4px; background-color: #007bff; color: white; }
+        button:disabled { background-color: #ccc; }
+        button.close { background-color: #dc3545; }
+        #receive-box { height: 200px; background: #222; color: #0f0; padding: 10px; overflow-y: auto; font-family: monospace; white-space: pre-wrap; margin-top: 10px; }
+        .status { font-size: 0.9em; margin-left: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Web 串口通讯工具</h2>
+
+    <!-- 1.  网址/IP 跳转区 -->
+    <div class="section">
+        <label>访问网址/IP (模拟浏览器功能):</label>
+        <div class="controls">
+            <input type="text" id="url-input" placeholder="https://www.google.com">
+            <button onclick="window.location.href = document.getElementById('url-input').value">前往</button>
+        </div>
+    </div>
+
+    <!-- 2. 2. 串口控制区 -->
+    <div class="section">
+        <label>串口设置:</label>
+        <div class="controls">
+            <div>
+                <span>波特率:</span>
+                <select id="baudrate">
+                    <option value="9600">9600</option>
+                    <option value="115200" selected>115200</option>
+                    <option value="38400">38400</option>
+                </select>
+            </div>
+            <button id="btn-open">选择并打开串口</button>
+            <button id="btn-close" class="close" disabled>关闭串口</button>
+            <span id="status-text" class="status">状态: 未连接</span>
+        </div>
+    </div>
+
+    <!-- 3. 发送和接收区 -->
+    <div class="section">
+        <label>发送数据:</label>
+        <div class="controls">
+            <input type="text" id="send-input" placeholder="输入要发送的内容...">
+            <button id="btn-send" disabled>发送</button>
+        </div>
+    </div>
+
+    <div class="section">
+        <label>接收数据:</label>
+        <div id="receive-box"></div>
+        <button onclick="document.getElementById('receive-box').innerHTML = ''" style="margin-top:5px; background:#6c757d">清空接收区</button>
+    </div>
+</div>
+
+<script>
+    let port;
+    let reader;
+    let writer;
+    let keepReading = true;
+    // --- 远程同步逻辑 ---
+    let mqttClient;
+
+    const topic = "telefield-serial-room-123"; // 你们约定的唯一房间名
+    const btnOpen = document.getElementById('btn-open');
+    const btnClose = document.getElementById('btn-close');
+    const btnSend = document.getElementById('btn-send');
+    const receiveBox = document.getElementById('receive-box');
+    const statusText = document.getElementById('status-text');
+    const sendInput = document.getElementById('send-input');
+    const baudRateSelect = document.getElementById('baudrate');
+
+    // 检测浏览器支持情况
+    if (!("serial" in navigator)) {
+        alert("浏览器不支持 Web Serial API，请使用 Chrome 或 Edge 浏览器");
+    }
+
+    // 打开串口
+    btnOpen.addEventListener('click', async () => {
+        try {
+            // 提示用户选择串口
+            port = await navigator.serial.requestPort();
+            const baudRate = parseInt(baudRateSelect.value);
+            
+            await port.open({ baudRate: baudRate });
+            
+            statusText.innerText = "状态: 已连接";
+            statusText.style.color = "green";
+            btnOpen.disabled = true;
+            btnClose.disabled = false;
+            btnSend.disabled = false;
+
+            readLoop(); // 开始读取循环
+        } catch (error) {
+            console.error(error);
+            alert("打开串口失败: " + error.message);
+        }
+    });
+
+    // 关闭串口
+    btnClose.addEventListener('click', async () => {
+        keepReading = false;
+        if (reader) {
+            await reader.cancel();
+        }
+        if (port) {
+            await port.close();
+        }
+        statusText.innerText = "状态: 未连接";
+        statusText.style.color = "black";
+        btnOpen.disabled = false;
+        btnClose.disabled = true;
+        btnSend.disabled = true;
+    });
+
+    // 发送数据
+    btnSend.addEventListener('click', async () => {
+        const text = sendInput.value;
+        if (text && port.writable) {
+            const encoder = new TextEncoder();
+            const writer = port.writable.getWriter();
+            await writer.write(encoder.encode(text + "\r\n")); // 默认加个换行
+            writer.releaseLock();
+            sendInput.value = "";
+        }
+    });
+
+    // 初始化 MQTT 连接
+    function initRemoteSync() {
+    // 使用公共的免费测试服务器（注意：生产环境建议用私有的）
+    mqttClient = mqtt.connect('wss://test.mosquitto.org:8081/mqtt');
+    
+    mqttClient.on('connect', () => {
+        console.log("已连接到远程同步服务器");
+        mqttClient.subscribe(topic);
+    });
+
+    // 收到远程发来的数据（如果远端也能发命令控制你）
+    mqttClient.on('message', (t, message) => {
+        if (t === topic) {
+            console.log("收到远程监控指令:", message.toString());
+        }
+    });
+}
+
+    // 持续读取数据的循环
+    async function readLoop() {
+        keepReading = true;
+        while (port.readable && keepReading) {
+            reader = port.readable.getReader();
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    // 将 Uint8Array 转换为文本
+                    const decoder = new TextDecoder();
+                    const text = decoder.decode(value);
+
+                    receiveBox.innerText += decoder.decode(value);
+                    // 自动滚动到底部
+                    receiveBox.scrollTop = receiveBox.scrollHeight;
+
+                     // 3. 【新增：同步到远程】
+                    // 只有当数据不为空且 MQTT 已连接时才发送
+                    if (mqttClient && mqttClient.connected) {
+                        mqttClient.publish(topic, text); 
+                    }
+                }
+            } catch (error) {
+                console.error("读取数据:", error);
+            } finally {
+                reader.releaseLock();
+            }
+        }
+
+    }
+</script>
+
+</body>
+</html>
