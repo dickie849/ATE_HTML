@@ -2,189 +2,235 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>Web 网页串口调试工具</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web 串口远程同步工具</title>
+    <!-- 引入 MQTT 库用于远程同步 -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
-        body { font-family: sans-serif; padding: 20px; background-color: #f4f4f9; }
-        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .section { margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"], textarea { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
-        .controls { display: flex; gap: 10px; align-items: flex-end; }
-        button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 4px; background-color: #007bff; color: white; }
-        button:disabled { background-color: #ccc; }
-        button.close { background-color: #dc3545; }
-        #receive-box { height: 200px; background: #222; color: #0f0; padding: 10px; overflow-y: auto; font-family: monospace; white-space: pre-wrap; margin-top: 10px; }
-        .status { font-size: 0.9em; margin-left: 10px; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #f0f2f5; color: #333; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+        h2 { margin-top: 0; color: #007bff; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .section { margin-bottom: 20px; padding: 15px; border: 1px solid #f0f0f0; border-radius: 8px; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; font-size: 14px; }
+        
+        .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        input[type="text"], select { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; flex-grow: 1; }
+        
+        button { padding: 8px 16px; cursor: pointer; border: none; border-radius: 6px; background-color: #007bff; color: white; transition: 0.3s; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        button.danger { background-color: #dc3545; }
+        button.danger:hover { background-color: #a71d2a; }
+
+        #receive-box { 
+            height: 300px; background: #1e1e1e; color: #d4d4d4; 
+            padding: 15px; overflow-y: auto; font-family: 'Consolas', 'Monaco', monospace; 
+            white-space: pre-wrap; border-radius: 6px; margin-top: 10px; line-height: 1.5;
+        }
+        .status-bar { display: flex; justify-content: space-between; font-size: 13px; margin-top: 10px; padding: 5px 10px; background: #f8f9fa; border-radius: 4px; }
+        .room-info { color: #6610f2; font-weight: bold; }
+        .local-msg { color: #4af626; } /* 本地串口数据颜色 */
+        .remote-msg { color: #00bcff; } /* 远程同步数据颜色 */
+        .system-msg { color: #ff8800; font-style: italic; }
     </style>
 </head>
 <body>
- 
+
 <div class="container">
-    <h2>Web 串口通讯工具</h2>
+    <h2>Web 串口远程同步工具</h2>
 
-    <!-- 1.  网址/IP 跳转区 -->
+    <!-- 1. 网址跳转 -->
     <div class="section">
-        <label>访问网址/IP (模拟浏览器功能):</label>
+        <label>访问网址/IP (模拟浏览器跳转):</label>
         <div class="controls">
-            <input type="text" id="url-input" placeholder="https://www.google.com">
-            <button onclick="window.location.href = document.getElementById('url-input').value">前往</button>
+            <input type="text" id="url-input" placeholder="输入网址，例如 https://www.github.com">
+            <button onclick="location.href=document.getElementById('url-input').value">前往</button>
         </div>
     </div>
 
-    <!-- 2. 2. 串口控制区 -->
+    <!-- 2. 串口配置 -->
     <div class="section">
-        <label>串口设置:</label>
+        <label>本地串口控制 (操作员使用):</label>
         <div class="controls">
-            <div>
-                <span>波特率:</span>
-                <select id="baudrate">
-                    <option value="9600">9600</option>
-                    <option value="115200" selected>115200</option>
-                    <option value="38400">38400</option>
-                </select>
-            </div>
+            <select id="baudrate">
+                <option value="9600">9600 Baud</option>
+                <option value="115200" selected>115200 Baud</option>
+            </select>
             <button id="btn-open">选择并打开串口</button>
-            <button id="btn-close" class="close" disabled>关闭串口</button>
-            <span id="status-text" class="status">状态: 未连接</span>
+            <button id="btn-close" class="danger" disabled>关闭串口</button>
         </div>
     </div>
 
-    <!-- 3. 发送和接收区 -->
+    <!-- 3. 发送数据 -->
     <div class="section">
-        <label>发送数据:</label>
+        <label>发送命令:</label>
         <div class="controls">
-            <input type="text" id="send-input" placeholder="输入要发送的内容...">
-            <button id="btn-send" disabled>发送</button>
+            <input type="text" id="send-input" placeholder="输入指令并回车..." onkeydown="if(event.keyCode==13) sendData()">
+            <button id="btn-send" disabled onclick="sendData()">发送</button>
         </div>
     </div>
 
+    <!-- 4. 接收区 -->
     <div class="section">
-        <label>接收数据:</label>
+        <div style="display:flex; justify-content: space-between; align-items: center;">
+            <label>数据接收区:</label>
+            <button onclick="document.getElementById('receive-box').innerHTML=''" style="background:#6c757d; font-size:12px; padding:4px 8px;">清空</button>
+        </div>
         <div id="receive-box"></div>
-        <button onclick="document.getElementById('receive-box').innerHTML = ''" style="margin-top:5px; background:#6c757d">清空接收区</button>
+        
+        <div class="status-bar">
+            <span>串口状态: <span id="serial-status">未连接</span></span>
+            <span>同步状态: <span id="mqtt-status">正在连接云端...</span></span>
+            <span class="room-info">房间ID: <span id="room-display">加载中...</span></span>
+        </div>
+    </div>
+    
+    <div style="font-size: 12px; color: #999;">
+        提示：将当前网址分享给他人，加上 <b>?room=自定义名称</b> 即可实现多人远程实时监控。
     </div>
 </div>
 
 <script>
-    let port;
-    let reader;
-    let writer;
-    let keepReading = true;
-    // --- 远程同步逻辑 ---
-    let mqttClient;
+    // --- 全局变量 ---
+    let port, reader, writer, keepReading = false;
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
 
-    const topic = "telefield-serial-room-123"; // 你们约定的唯一房间名
+    // --- 获取 UI 元素 ---
     const btnOpen = document.getElementById('btn-open');
     const btnClose = document.getElementById('btn-close');
     const btnSend = document.getElementById('btn-send');
     const receiveBox = document.getElementById('receive-box');
-    const statusText = document.getElementById('status-text');
-    const sendInput = document.getElementById('send-input');
-    const baudRateSelect = document.getElementById('baudrate');
+    const serialStatus = document.getElementById('serial-status');
+    const mqttStatusText = document.getElementById('mqtt-status');
+    const roomDisplay = document.getElementById('room-display');
 
-    // 检测浏览器支持情况
+    // --- 1. MQTT 远程同步逻辑 ---
+    // 从 URL 获取房间号，如果没有则随机生成一个
+    const urlParams = new URLSearchParams(window.location.search);
+    let roomId = urlParams.get('room');
+    if (!roomId) {
+        roomId = "default_" + Math.floor(Math.random() * 1000);
+        // 如果没有房间号，自动在地址栏加上，方便分享
+        window.history.replaceState(null, '', `?room=${roomId}`);
+    }
+    roomDisplay.innerText = roomId;
+
+    // 连接到公共 MQTT 服务器 (WebSocket 协议)
+    const mqttClient = mqtt.connect('wss://test.mosquitto.org:8081/mqtt');
+
+    mqttClient.on('connect', () => {
+        mqttStatusText.innerText = "已连接云端";
+        mqttStatusText.style.color = "green";
+        mqttClient.subscribe(roomId);
+        logToBox(`系统: 已加入远程房间 [${roomId}]`, "system-msg");
+    });
+
+    // 处理收到的远程消息
+    mqttClient.on('message', (topic, message) => {
+        if (topic === roomId) {
+            const data = message.toString();
+            // 如果自己已经连了串口，就不要重复显示自己发出的同步消息了
+            if (data.startsWith("[远程]")) {
+                logToBox(data, "remote-msg");
+            } else if (!port) {
+                // 如果我只是个观察者（没连串口），显示所有收到的数据
+                logToBox(data, "remote-msg");
+            }
+        }
+    });
+
+    function logToBox(text, className) {
+        const span = document.createElement('span');
+        span.className = className;
+        span.innerText = text;
+        receiveBox.appendChild(span);
+        receiveBox.scrollTop = receiveBox.scrollHeight;
+    }
+
+    // --- 2. 串口核心逻辑 ---
+
+    // 检查浏览器支持
     if (!("serial" in navigator)) {
-        alert("浏览器不支持 Web Serial API，请使用 Chrome 或 Edge 浏览器");
+        alert("错误：您的浏览器不支持 Web Serial API。请使用 Chrome 或 Edge。");
     }
 
     // 打开串口
     btnOpen.addEventListener('click', async () => {
         try {
-            // 提示用户选择串口
             port = await navigator.serial.requestPort();
-            const baudRate = parseInt(baudRateSelect.value);
-            
-            await port.open({ baudRate: baudRate });
-            
-            statusText.innerText = "状态: 已连接";
-            statusText.style.color = "green";
+            const baudRate = parseInt(document.getElementById('baudrate').value);
+            await port.open({ baudRate });
+
+            serialStatus.innerText = "已连接 (COM)";
+            serialStatus.style.color = "green";
             btnOpen.disabled = true;
             btnClose.disabled = false;
             btnSend.disabled = false;
 
-            readLoop(); // 开始读取循环
-        } catch (error) {
-            console.error(error);
-            alert("打开串口失败: " + error.message);
+            readLoop();
+        } catch (err) {
+            console.error(err);
+            alert("无法打开串口，请确保设备未被其他程序占用。");
         }
     });
 
     // 关闭串口
     btnClose.addEventListener('click', async () => {
         keepReading = false;
-        if (reader) {
-            await reader.cancel();
-        }
-        if (port) {
-            await port.close();
-        }
-        statusText.innerText = "状态: 未连接";
-        statusText.style.color = "black";
+        if (reader) await reader.cancel();
+        if (port) await port.close();
+        port = null;
+        serialStatus.innerText = "已断开";
+        serialStatus.style.color = "red";
         btnOpen.disabled = false;
         btnClose.disabled = true;
         btnSend.disabled = true;
     });
 
-    // 发送数据
-    btnSend.addEventListener('click', async () => {
-        const text = sendInput.value;
-        if (text && port.writable) {
-            const encoder = new TextEncoder();
+    // 发送数据函数
+    async function sendData() {
+        const input = document.getElementById('send-input');
+        const text = input.value;
+        if (text && port && port.writable) {
             const writer = port.writable.getWriter();
-            await writer.write(encoder.encode(text + "\r\n")); // 默认加个换行
+            await writer.write(encoder.encode(text + "\r\n"));
             writer.releaseLock();
-            sendInput.value = "";
+            
+            // 同步给远程：告知大家我发了什么命令
+            if(mqttClient.connected) {
+                mqttClient.publish(roomId, `[命令] ${text}\n`);
+            }
+            logToBox(`[发送] ${text}\n`, "local-msg");
+            input.value = "";
         }
-    });
+    }
 
-    // 初始化 MQTT 连接
-    function initRemoteSync() {
-    // 使用公共的免费测试服务器（注意：生产环境建议用私有的）
-    mqttClient = mqtt.connect('wss://test.mosquitto.org:8081/mqtt');
-    
-    mqttClient.on('connect', () => {
-        console.log("已连接到远程同步服务器");
-        mqttClient.subscribe(topic);
-    });
-
-    // 收到远程发来的数据（如果远端也能发命令控制你）
-    mqttClient.on('message', (t, message) => {
-        if (t === topic) {
-            console.log("收到远程监控指令:", message.toString());
-        }
-    });
-}
-
-    // 持续读取数据的循环
+    // 持续读取循环
     async function readLoop() {
         keepReading = true;
-        while (port.readable && keepReading) {
+        while (port && port.readable && keepReading) {
             reader = port.readable.getReader();
             try {
                 while (true) {
                     const { value, done } = await reader.read();
                     if (done) break;
-                    // 将 Uint8Array 转换为文本
-                    const decoder = new TextDecoder();
+                    
                     const text = decoder.decode(value);
+                    // 1. 本地显示
+                    logToBox(text, "local-msg");
 
-                    receiveBox.innerText += decoder.decode(value);
-                    // 自动滚动到底部
-                    receiveBox.scrollTop = receiveBox.scrollHeight;
-
-                     // 3. 【新增：同步到远程】
-                    // 只有当数据不为空且 MQTT 已连接时才发送
-                    if (mqttClient && mqttClient.connected) {
-                        mqttClient.publish(topic, text); 
+                    // 2. 实时同步到远程 (加上 [远程] 标识方便他人区分)
+                    if (mqttClient.connected) {
+                        mqttClient.publish(roomId, "[远程] " + text);
                     }
                 }
-            } catch (error) {
-                console.error("读取数据:", error);
+            } catch (err) {
+                console.error(err);
             } finally {
                 reader.releaseLock();
             }
         }
-
     }
 </script>
 
